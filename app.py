@@ -6,8 +6,8 @@ import redis.asyncio as redis
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 client=redis.from_url(os.environ.get("REDIS_URL","redis://localhost:6379/0"),decode_responses=True,socket_connect_timeout=2,socket_timeout=2)
-requests=Counter("boutique_cart_requests_total","HTTP requests",["method","route","status"])
-latency=Histogram("boutique_cart_request_seconds","Latency",["route"])
+requests=Counter("boutique_http_requests_total","HTTP requests",["service","method","route","status"])
+latency=Histogram("boutique_http_request_duration_seconds","Latency",["service","method","route","status"], buckets=(.01,.05,.1,.25,.5,1,2.5,5,10))
 @asynccontextmanager
 async def lifespan(app):
     yield
@@ -19,7 +19,9 @@ async def unavailable(request,exc):return Response('{"error":"cart_unavailable"}
 async def observe(request:Request,call_next):
     started=time.monotonic(); response=await call_next(request)
     route=request.scope.get("route"); name=route.path if route else "unmatched"
-    requests.labels(request.method,name,response.status_code).inc();latency.labels(name).observe(time.monotonic()-started)
+    if not name.startswith("/health/") and name!="/metrics":
+        method=request.method if request.method in {"GET","PUT","DELETE","POST","HEAD","OPTIONS"} else "OTHER"
+        requests.labels("cart",method,name,response.status_code).inc();latency.labels("cart",method,name,response.status_code).observe(time.monotonic()-started)
     logging.info(json.dumps({"route":name,"status":response.status_code,"request_id":request.headers.get("x-request-id","")}));return response
 def key(session):
     if len(session)!=64 or any(c not in "0123456789abcdef" for c in session):raise HTTPException(400,"invalid_session")
