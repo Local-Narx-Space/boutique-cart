@@ -1,0 +1,46 @@
+import json, logging, os, time
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel, Field
+import redis.asyncio as redis
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+client=redis.from_url(os.environ.get("REDIS_URL","redis://localhost:6379/0"),decode_responses=True,socket_connect_timeout=2,socket_timeout=2)
+requests=Counter("boutique_cart_requests_total","HTTP requests",["method","route","status"])
+latency=Histogram("boutique_cart_request_seconds","Latency",["route"])
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    await client.aclose()
+app=FastAPI(lifespan=lifespan)
+@app.exception_handler(redis.RedisError)
+async def unavailable(request,exc):return Response('{"error":"cart_unavailable"}',503,media_type="application/json")
+@app.middleware("http")
+async def observe(request:Request,call_next):
+    started=time.monotonic(); response=await call_next(request)
+    route=request.scope.get("route"); name=route.path if route else "unmatched"
+    requests.labels(request.method,name,response.status_code).inc();latency.labels(name).observe(time.monotonic()-started)
+    logging.info(json.dumps({"route":name,"status":response.status_code,"request_id":request.headers.get("x-request-id","")}));return response
+def key(session):
+    if len(session)!=64 or any(c not in "0123456789abcdef" for c in session):raise HTTPException(400,"invalid_session")
+    return "cart:"+session
+class Item(BaseModel):quantity:int=Field(ge=1,le=20,strict=True)
+@app.get("/health/live")
+async def live():return {"status":"ok"}
+@app.get("/health/ready")
+async def ready():
+    await client.ping();return {"status":"ok"}
+@app.get("/metrics")
+async def metrics():return Response(generate_latest(),headers={"Content-Type":CONTENT_TYPE_LATEST})
+@app.get("/carts/{session}")
+async def get_cart(session:str):return {"items":[{"productId":p,"quantity":int(q)} for p,q in sorted((await client.hgetall(key(session))).items())]}
+@app.put("/carts/{session}/items/{product}")
+async def put(session:str,product:str,item:Item):
+    if product not in {"mug","notebook","shirt","keyboard"}:raise HTTPException(404,"product_not_found")
+    k=key(session)
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.hset(k,product,item.quantity);pipe.expire(k,604800);await pipe.execute()
+    return await get_cart(session)
+@app.delete("/carts/{session}/items/{product}")
+async def delete(session:str,product:str):
+    await client.hdel(key(session),product);return await get_cart(session)
