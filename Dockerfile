@@ -8,7 +8,10 @@ COPY requirements*.txt ./
 RUN pip install --require-hashes --no-cache-dir -r requirements-dev.txt
 COPY app.py .
 COPY tests ./tests
-RUN python -m pytest -q tests
+COPY ci ./ci
+ENV PYTHONDONTWRITEBYTECODE=1
+RUN chmod -R a+rX /test
+CMD ["sh", "ci/test.sh"]
 
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 RUN groupadd -g 10001 app && useradd -u 10001 -g app app
@@ -16,7 +19,7 @@ WORKDIR /app
 COPY --from=build /wheels /wheels
 COPY requirements.txt .
 RUN pip install --require-hashes --no-cache-dir --no-index --find-links=/wheels -r requirements.txt && rm -rf /wheels
-COPY --from=test --chown=app:app --chmod=644 /test/app.py .
+COPY --chown=app:app --chmod=644 app.py .
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 10001:10001
 EXPOSE 8082
