@@ -1,8 +1,8 @@
-FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS build
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS build
 WORKDIR /build
 COPY requirements.txt .
 RUN pip wheel --require-hashes --no-cache-dir --wheel-dir=/wheels -r requirements.txt
-FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS test
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS test
 WORKDIR /test
 COPY requirements*.txt ./
 RUN pip install --require-hashes --no-cache-dir -r requirements-dev.txt
@@ -13,7 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN chmod -R a+rX /test
 CMD ["sh", "ci/test.sh"]
 
-FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 RUN groupadd -g 10001 app && useradd -u 10001 -g app app
 WORKDIR /app
 COPY --from=build /wheels /wheels
