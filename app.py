@@ -1,4 +1,4 @@
-import json, logging, os, time
+import json, logging, os, re, time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -38,7 +38,7 @@ async def metrics():return Response(generate_latest(),headers={"Content-Type":CO
 async def get_cart(session:str):return {"items":[{"productId":p,"quantity":int(q)} for p,q in sorted((await client.hgetall(key(session))).items())]}
 @app.put("/carts/{session}/items/{product}")
 async def put(session:str,product:str,item:Item):
-    if product not in {"mug","notebook","shirt","keyboard"}:raise HTTPException(404,"product_not_found")
+    if not re.fullmatch(r"[a-z0-9-]{1,64}",product):raise HTTPException(400,"invalid_product")
     k=key(session)
     async with client.pipeline(transaction=True) as pipe:
         pipe.hset(k,product,item.quantity);pipe.expire(k,604800);await pipe.execute()
@@ -46,3 +46,21 @@ async def put(session:str,product:str,item:Item):
 @app.delete("/carts/{session}/items/{product}")
 async def delete(session:str,product:str):
     await client.hdel(key(session),product);return await get_cart(session)
+
+# Atomic, retry-safe transfer of a guest bag into an authenticated customer bag.
+# Only the frontend can reach these private cart routes through the lab policy.
+MERGE_CART = """
+if KEYS[1] == KEYS[2] then return 0 end
+local items = redis.call('HGETALL', KEYS[1])
+for index = 1, #items, 2 do
+  local old = tonumber(redis.call('HGET', KEYS[2], items[index]) or '0')
+  redis.call('HSET', KEYS[2], items[index], math.min(20, old + tonumber(items[index+1])))
+end
+if #items > 0 then redis.call('EXPIRE', KEYS[2], 604800) end
+redis.call('DEL', KEYS[1])
+return #items / 2
+"""
+@app.post("/carts/{session}/merge/{target}")
+async def merge_cart(session:str,target:str):
+    await client.eval(MERGE_CART,2,key(session),key(target))
+    return await get_cart(target)
